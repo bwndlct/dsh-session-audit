@@ -1,12 +1,11 @@
 # dsh-session-audit
 
-Understand how your DeepSeek Harness agent actually worked.
+看清你的 DeepSeek Harness Agent 这次到底是怎么干活的。
 
-Inspect steps, tool calls, failures, repeated actions, token usage and
-verification signals for one DSH session — rendered as a readable audit
-report by a single `session_audit` tool call.
+对一个 DSH Session 做 Steps / Tool Calls / 失败 / 重复动作 / Token /
+验证命令（test/build/lint）的执行审计，通过一次 `session_audit` 工具调用输出一份可读的审计报告。
 
-中文说明见 [README.zh.md](./README.zh.md)。
+English documentation: [README.en.md](./README.en.md)
 
 ```text
 DSH Session Audit
@@ -54,240 +53,224 @@ Verification
   ✓ npm test  [test]  (2 attempts, 2 ok)
 ```
 
-*(real report from a live machine session)*
+*(来自本机真实会话的报告)*
 
-## Why
+## 为什么需要
 
-DSH sessions already record *what happened* — the session log is the
-append-only source of truth. But reading a 1000-event log does not answer
-the questions you actually have after an agent run:
+DSH 的 session 日志已经完整记录了"发生了什么"——它是 append-only 的事实源。
+但读完一份上千事件的日志，并不能直接回答你真正关心的问题：
 
-> How long did this take? How many turns and steps? Which tools dominated?
-> Where did it fail? Did it repeat the same calls? Was anything verified?
+> 跑了多久？多少个 Turn / Step？哪些工具用得最多？在哪里失败？
+> 有没有重复调用？最后验证过没有？
 
-`dsh-session-audit` folds one session's durable event log into those
-answers. It is a **step / tool-call profiler and failure analyzer**, not a
-token dashboard (see [Existing alternatives](#existing-alternatives)).
+`dsh-session-audit` 把单个 session 的持久化事件日志折叠成这些答案。
+它是 **Step / Tool-call Profiler 和失败分析器**，不是 Token 仪表盘
+（见[现有同类插件](#现有同类插件)）。
 
-## Features
+## 功能
 
-- **Session metrics** — duration, turns, steps, assistant messages, tool
-  call totals, per-tool distribution, success/failure split.
-- **Token usage** — input / output / cache buckets folded per model step
-  exactly like the official `session-stats` projection; reported as
-  *unavailable* (never estimated) when the provider logged no usage.
-- **Deterministic audit signals** — consecutive failures, failure rate,
-  high-frequency tools, identical repeated calls (key-order insensitive),
-  repeated reads of the same file. Rule-based only; no LLM judgement.
-- **Verification detection** — recognizes test/build/lint/typecheck
-  commands (`npm test`, `pytest`, `cargo test`, `tsc`, `eslint`, …) inside
-  shell tool calls and reports their observed outcomes.
-- **Three formats** — text (default), Markdown, JSON with a stable
-  `schemaVersion` you can build on.
-- **Live or historical** — audits the current session in memory by default,
-  or any durable session by id; lists recent sessions for discovery.
-- **Robust** — empty sessions, malformed events, unknown future event
-  types, orphan results, torn crash-tail log frames: all handled without
-  crashing, and surfaced as data-quality notes.
+- **Session 指标** — 时长、Turns、Steps、assistant 消息数、工具调用
+  总数、按工具分布、成功/失败拆分。
+- **Token 用量** — 按 turn:step 折叠 input / output / cache 桶，语义与
+  官方 `session-stats` 投影一致；provider 没上报时显示 Unavailable，
+  绝不估算。
+- **确定性审计信号** — 连续失败、失败率、高频工具、完全相同的重复
+  调用（对参数 key 顺序不敏感）、重复读取同一文件。纯规则判定，不用
+  LLM 打分。
+- **验证命令识别** — 识别 shell 工具调用中的 test/build/lint/typecheck
+  命令（`npm test`、`pytest`、`cargo test`、`tsc`、`eslint`……）并报告
+  实际观察到的结果。
+- **三种格式** — text（默认）、Markdown、JSON（带稳定 `schemaVersion`）。
+- **当前或历史 Session** — 默认审计当前内存中的 session，也可按 id
+  审计任一持久化 session；支持列出最近的 session。
+- **健壮** — 空会话、畸形事件、未来新增的事件类型、孤儿 result、
+  崩溃尾部残帧：全部安全处理，并在报告中以数据质量说明呈现。
 
-## Installation
+## 安装
 
-Requires dsh (`@deepseek-ai/dsh`) 0.1.0-rc.6+.
+要求 dsh（`@deepseek-ai/dsh`）0.1.0-rc.6+。
 
 ```sh
-# from npm (once published)
+# npm（发布后）
 dsh plugin --profile web add dsh-session-audit
 
-# from GitHub
+# GitHub
 dsh plugin --profile web add github:bwndlct/dsh-plugins/plugins/dsh-session-audit
 
-# local development (link)
+# 本地开发（link）
 dsh plugin --profile web add link:/path/to/dsh-plugins/plugins/dsh-session-audit
 ```
 
-Then add the package to the profile's `dsh.profile.bundles` array in
-`~/.dsh/profiles/web/package.json` (the install command above does not do
-this step):
+然后编辑 `~/.dsh/profiles/web/package.json`，把包加进
+`dsh.profile.bundles`（上面的安装命令不会做这一步）：
 
 ```jsonc
 "dsh": {
   "profile": {
     "bundles": [
-      // ...existing entries...
+      // ...现有条目...
       "dsh-session-audit"
     ]
   }
 }
 ```
 
-Restart dsh (`dsh web`). Verify the mount:
+重启 dsh（`dsh web`），并验证挂载：
 
 ```sh
 dsh --profile web --dump-config | grep -A2 session-audit
 ```
 
-## Usage
+## 使用
 
-In a session, ask the agent (it will call the tool), or call it directly:
+在会话里直接让 Agent 调用（自然语言即可），或带参数调用工具：
 
-- `audit this session` — audits the current session.
-- `audit session session-abc123` — audits a stored session by id.
-- `list recent sessions` — lists durable sessions to pick from.
-- `audit this session as markdown` / `as json` — picks the format.
+- `审计当前会话` — 审计当前 session。
+- `审计 session session-abc123` — 按 id 审计某个存储的 session。
+- `列出最近的 session` — 列出可审计的持久化 session。
+- `用 markdown/json 格式审计当前会话` — 指定输出格式。
 
-Tool parameters:
+工具参数：
 
-| parameter | type | meaning |
+| 参数 | 类型 | 含义 |
 |---|---|---|
-| `session_id` | string | target session (default: current session) |
-| `format` | `text` \| `markdown` \| `json` | report format (default `text`) |
-| `list_sessions` | boolean | list recent sessions instead of auditing |
+| `session_id` | string | 目标 session（默认当前会话） |
+| `format` | `text` \| `markdown` \| `json` | 报告格式（默认 `text`） |
+| `list_sessions` | boolean | 列出最近 session 而不是审计 |
 
-The report stays local — it is returned as the tool result for you and the
-model to read; nothing is written to disk.
+报告只留在本地——作为工具结果返回给你和模型阅读，不写盘。
 
-## Audit Signals
+## 审计信号
 
-All rules are deterministic and threshold-driven; every threshold lives in
-one place (`src/rules/thresholds.ts`) and defaults are conservative so a
-normal session does not drown in warnings.
+全部规则都是确定性的、阈值驱动；所有阈值集中在一个文件
+（`src/rules/thresholds.ts`），默认值保守，正常会话不会被警告淹没。
 
-| Signal | Severity | Default threshold |
+| 信号 | 级别 | 默认阈值 |
 |---|---|---|
-| consecutive failed tool calls | warning | ≥ 3 |
-| overall tool failure rate | warning | ≥ 15% over ≥ 3 resolved results |
-| identical tool call repeated | warning | ≥ 3 occurrences (arguments compared with sorted keys — JSON key order never hides a duplicate) |
-| same file read repeatedly | info / warning | ≥ 4 reads (warning ≥ 8); reader tool + argument name configurable (`read`/`read_file` → `file_path` by default) |
-| high-frequency tool | info / warning | ≥ 15 calls (info), ≥ 30 (warning) |
-| turn ended non-completed | info | any `aborted` / `error` / `interrupted` ending |
-| open turn | info | live/interrupted session indicator |
-| no verification command detected | info | careful wording — absence of evidence, not evidence of absence |
-| verification command failed | warning | last observed attempt failed |
-| repeated verification failures | warning | ≥ 2 failed attempts, none succeeding after |
+| 连续失败的工具调用 | warning | ≥ 3 |
+| 工具总体失败率 | warning | ≥ 15% 且 ≥ 3 个有结果的调用 |
+| 完全相同的工具调用重复 | warning | ≥ 3 次（参数按排序后的 key 比较，JSON key 顺序不同不会漏判） |
+| 同一文件被反复读取 | info / warning | ≥ 4 次（≥ 8 次升 warning）；读取工具与参数名可配置（默认 `read`/`read_file` → `file_path`） |
+| 高频工具 | info / warning | ≥ 15 次（info），≥ 30 次（warning） |
+| Turn 非正常结束 | info | 任何 `aborted` / `error` / `interrupted` |
+| 存在未关闭的 Turn | info | 活跃/被中断会话的标志 |
+| 未观察到验证命令 | info | 措辞谨慎——"未观察到"，不是"没有验证" |
+| 验证命令失败 | warning | 最后一次观察到的尝试失败 |
+| 验证命令连续失败 | warning | ≥ 2 次失败且之后没有成功 |
 
-There is deliberately **no efficiency score** — the report states facts and
-deterministic findings; judging them stays with you.
+刻意**没有效率评分**——报告陈述事实和确定性发现，判断权留给你。
 
-## Verification Detection
+## 验证命令识别
 
-The rules recognize common verifiers inside shell tool calls
-(`bash` / `pwsh`, configurable):
+规则识别 shell 工具调用（`bash` / `pwsh`，可配置）里的常见验证命令：
 
-- **test**: `npm|pnpm|yarn|bun (run) test*`, `pytest`, `cargo test`,
-  `go test`, `dotnet test`, `jest`, `vitest`, `mocha`, `mvn|gradle test`,
+- **test**：`npm|pnpm|yarn|bun (run) test*`、`pytest`、`cargo test`、
+  `go test`、`dotnet test`、`jest`、`vitest`、`mocha`、`mvn|gradle test`、
   `make test`
-- **lint**: `(npm|pnpm|yarn|bun) (run) lint*`, `eslint`, `biome`,
-  `prettier`, `ruff`, `pylint`, `flake8`, `golangci-lint`
-- **typecheck**: `(npm|…) typecheck*`, `tsc`, `mypy`, `pyright`,
+- **lint**：`(npm|pnpm|yarn|bun) (run) lint*`、`eslint`、`biome`、
+  `prettier`、`ruff`、`pylint`、`flake8`、`golangci-lint`
+- **typecheck**：`(npm|…) typecheck*`、`tsc`、`mypy`、`pyright`、
   `cargo check`
-- **build**: `(npm|pnpm|yarn|bun) (run) build*`, `cargo build`, `go build`,
-  `dotnet build`, `make build|all`
+- **build**：`(npm|pnpm|yarn|bun) (run) build*`、`cargo build`、
+  `go build`、`dotnet build`、`make build|all`
 
-Success is decided from what was actually observed in the tool result:
-a harness-level error, or the documented `[exit code: N]` marker that
-dsh-tool-bash appends for non-zero exits, marks the attempt failed. A
-matched command with no durable result is treated as *not observed*, not as
-a failure. When no verifier is seen at all, the report says exactly that —
-it never claims the agent "did not verify", because verification may have
-run through a mechanism the log cannot show.
+成败只根据工具结果里实际观察到的内容判定：harness 级错误，或
+dsh-tool-bash 对非零退出追加的 `[exit code: N]` 标记（文档化约定），
+都算失败。匹配到命令但没有持久化结果的调用视为"未观察到"，不算
+失败。完全没有验证命令时，报告只说"未观察到验证命令"，绝不声称
+"Agent 没有验证"——验证可能走了日志看不到的机制。
 
-## How it works
+## 工作原理
 
 ```text
-DSH session (live registry or ~/.dsh/sessions durable log, zstd frames)
-        │  session-reader — frame split + decode + JSONL parse
+DSH session（live 注册表 或 ~/.dsh/sessions 持久化日志，zstd 帧）
+        │  session-reader — 帧切分 + 解码 + JSONL 解析
         ▼
-session-adapter — raw events → normalized AuditEvent vocabulary
+session-adapter — 原始事件 → 规范化 AuditEvent 词汇表
         ▼
-analyzer — one O(n) pass: counts, tool pairing, usage fold (per turn:step,
-           usage chunk superseded by final assistant/message usage)
+analyzer — 一次 O(n) 遍历：计数、工具配对、用量折叠
         ▼
-rules — deterministic signals from the folded facts
+rules — 基于折叠事实的确定性信号
         ▼
 SessionAuditReport (schemaVersion 1.0) — text / markdown / json
 ```
 
-- Turn/step counting mirrors the official `dsh-session-stats` semantics
-  (steps = `step/end` count; turns = distinct turns with a closed step), so
-  audit numbers agree with the Web UI stats strip.
-- Token buckets follow `TokenUsage` from `dsh-llm`: input excludes cached
-  input; cache read/write are separate; reasoning (a subset of output) is
-  reported but never added into totals.
-- DSH event-shape knowledge is confined to the adapter; the analyzer and
-  rules depend only on the normalized vocabulary.
+- Turn/Step 计数与官方 `dsh-session-stats` 语义一致
+  （steps = `step/end` 数；turns = 有已关闭 step 的不同 turn），审计
+  数字与 Web UI 统计条一致。
+- Token 桶遵循 `dsh-llm` 的 `TokenUsage`：input 不含缓存输入；
+  cache 读/写单列；reasoning（output 的子集）只展示、不重复计入总数。
+- 所有 DSH 事件形状知识都收敛在 adapter；analyzer 和 rules 只依赖
+  规范化词汇表。
 
-## Privacy
+## 隐私
 
-**dsh-session-audit performs local analysis only.** It reads session logs
-from this machine's DSH home and the live in-memory session registry. It
-makes no network requests, calls no LLM APIs, sends no telemetry, and
-collects nothing about you. Reports exist as tool-call results inside your
-own session.
+**dsh-session-audit 只做本地分析。** 只读取本机 DSH home 的 session
+日志和内存中的 live session 注册表。不发起任何网络请求、不调 LLM
+API、不发遥测、不收集任何用户数据。报告只作为工具结果存在于你自己的
+会话里。
 
-## Development
+## 开发
 
 ```sh
 cd plugins/dsh-session-audit
-npm install --no-save            # typescript + @types/node for tooling
-npx tsc -p tsconfig.json         # typecheck + build to lib/
-node --test tests/               # 32 unit tests
+npm install --no-save            # 安装 typescript + @types/node
+npx tsc -p tsconfig.json         # 类型检查 + 构建到 lib/
+node --test tests/               # 32 个单元测试
 ```
 
-Layout:
+目录结构：
 
 ```text
 src/
-  index.ts               tool registration + live/disk session loading
+  index.ts               工具注册 + live/磁盘 session 加载
   dsh/
-    session-adapter.ts   raw DSH events → normalized audit events
-    session-reader.ts    durable-log discovery, zstd decode, JSONL parse
+    session-adapter.ts   原始 DSH 事件 → 规范化审计事件
+    session-reader.ts    持久化日志发现、zstd 解码、JSONL 解析
   audit/
-    analyzer.ts          O(n) fold + rule orchestration
-    types.ts             SessionAuditReport schema, AuditEvent vocabulary
-  rules/                 one file per rule + centralized thresholds
+    analyzer.ts          O(n) 折叠 + 规则编排
+    types.ts             SessionAuditReport schema、AuditEvent 词汇表
+  rules/                 每条规则一个文件 + 集中阈值
   formatters/            text / markdown / json
-  utils/                 stable-json (sorted-key identity), duration
-tests/                   node:test suites: analyzer, rules, edge cases, reader
+  utils/                 stable-json（排序 key 身份）、duration
+tests/                   node:test 套件：analyzer、rules、边界、reader
 ```
 
-## Compatibility
+## 兼容性
 
-- Verified against `@deepseek-ai/dsh` **0.1.0-rc.6** (session format
-  version 0).
-- Reads both compressed (`session.jsonl.zstd`, default) and plain
-  (`session.jsonl`) durable logs.
-- `SESSION_FORMAT_VERSION` is pre-release; a future format bump will need
-  an adapter update — which is why all shape knowledge lives in one place.
+- 已针对 `@deepseek-ai/dsh` **0.1.0-rc.6**（session format version 0）
+  验证。
+- 同时支持压缩（`session.jsonl.zstd`，默认）与明文（`session.jsonl`）
+  持久化日志。
+- `SESSION_FORMAT_VERSION` 仍是 pre-release；未来格式升级只需改
+  adapter——这正是所有形状知识集中一处的原因。
 
-## Limitations
+## 限制
 
-- v0.1 does not track file modifications (created/edited/deleted files);
-  planned for v0.2 via tool-argument analysis.
-- Verification matching is pattern-based; a verifier wrapped in an unusual
-  script name is not recognized.
-- Sub-agent sessions are audited individually (by id); there is no
-  cross-session rollup yet.
-- Reasoning tokens are reported when the provider supplies them, but the
-  per-step values of some providers cannot be reconstructed.
-- No time-series or context-growth analysis yet (roadmap).
+- v0.1 不统计文件修改（创建/编辑/删除），计划 v0.2 通过工具参数分析
+  实现。
+- 验证命令识别基于模式；包在特殊脚本名里的验证器无法识别。
+- 子 Agent 的 session 需按 id 单独审计；暂无跨 session 汇总。
+- Reasoning token 在 provider 上报时展示，但部分 provider 的逐步值
+  无法重建。
+- 暂无时间序列 / 上下文增长分析（见路线图）。
 
-## Roadmap
+## 路线图
 
-- v0.2 — file modification stats
-- v0.3 — session compare
-- v0.4 — context growth analysis
-- v0.5 — HTML report
-- later — web dashboard views, cross-harness audit
+- v0.2 — 文件修改统计
+- v0.3 — session 对比
+- v0.4 — 上下文增长分析
+- v0.5 — HTML 报告
+- 之后 — Web 仪表盘视图、跨 harness 审计
 
-## Existing alternatives
+## 现有同类插件
 
-Token/cost dashboards already exist (`dsh-spend`, `dsh-balance-stats`,
-`dsh-session-cost`, `dsh-token-monitor`) and are complementary: they
-answer *how much did I spend*. This plugin answers *how did the agent
-work* — execution shape, failure locations, repetition, verification. As of
-v0.1.0 no other plugin in the `dsh-plugin` ecosystem covers single-session
-execution audit.
+Token/费用仪表盘已经存在（`dsh-spend`、`dsh-balance-stats`、
+`dsh-session-cost`、`dsh-token-monitor`），它们与本插件互补：回答的是
+"花了多少"。本插件回答"Agent 是怎么干活的"——执行形态、失败位置、
+重复行为、验证情况。截至 v0.1.0，`dshplugin` 生态中没有其他覆盖
+单 session 执行审计的插件。
 
-## License
+## 许可
 
 [MIT](./LICENSE)
