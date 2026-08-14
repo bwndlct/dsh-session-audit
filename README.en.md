@@ -6,7 +6,7 @@ Inspect steps, tool calls, failures, repeated actions, token usage and
 verification signals for one DSH session — rendered as a readable audit
 report by a single `session_audit` tool call.
 
-中文主文档：[README.md](./README.md)
+[简体中文](README.md) | **English**
 
 ```text
 DSH Session Audit

@@ -5,7 +5,7 @@
 对一个 DSH Session 做 Steps / Tool Calls / 失败 / 重复动作 / Token /
 验证命令（test/build/lint）的执行审计，通过一次 `session_audit` 工具调用输出一份可读的审计报告。
 
-English documentation: [README.en.md](./README.en.md)
+**简体中文** | [English](README.en.md)
 
 ```text
 DSH Session Audit
