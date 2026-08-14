@@ -1,0 +1,7 @@
+# dsh-session-audit bundle patch — when this package is listed in a
+# profile's dsh.profile.bundles, this insert mounts the plugin.
+# Local analysis only: reads session logs from disk/memory, never calls
+# any external service.
+- insert:
+    - id: session-audit
+      name: 'dsh-session-audit'

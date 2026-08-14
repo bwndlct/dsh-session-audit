@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.DS_Store
+# NOTE: lib/ (build output) is committed on purpose — GitHub-based installs
+# (`github:bwndlct/dsh-session-audit`) resolve the package entry from the
+# repo without a build step, mirroring other published dsh plugins.
