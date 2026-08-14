@@ -5,6 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { adaptSession } from '../src/dsh/session-adapter.ts'
 import { analyzeSession } from '../src/audit/analyzer.ts'
+import { DEFAULT_THRESHOLDS } from '../src/rules/thresholds.ts'
 import {
 	assistantMessage,
 	bashResult,
@@ -18,9 +19,9 @@ import {
 	turnStart,
 } from './fixtures.ts'
 
-function analyze(events) {
+function analyze(events, thresholds = undefined) {
 	const raw = { header: sessionHeader(), events }
-	return analyzeSession({ header: raw.header, adapted: adaptSession(raw) })
+	return analyzeSession({ header: raw.header, adapted: adaptSession(raw) }, thresholds)
 }
 
 test('duplicate tool call: key order does not distinguish arguments', () => {
@@ -260,4 +261,46 @@ test('verification: unresolved shell call is not counted as an attempt', () => {
 	])
 	assert.equal(report.verification.length, 0)
 	assert.ok(report.signals.some((signal) => signal.id === 'no-verification-detected'))
+})
+
+test('thresholds override: custom toolCallsWarning lowers high-frequency threshold', () => {
+	resetFixtures()
+	// With DEFAULT_THRESHOLDS, 10 read calls is below the info threshold (15).
+	// With a custom toolCallsInfo of 5, it should fire at 10.
+	const events = [turnStart(1), stepStart(1, 1)]
+	for (let index = 0; index < 10; index += 1) {
+		const callId = `h${index}`
+		events.push(toolCall(1, 1, callId, 'read', { file_path: `/f${index}.ts` }))
+		events.push(toolResult(1, 1, callId))
+	}
+	events.push(stepEnd(1, 1), turnEnd(1))
+
+	// Default thresholds: 10 < 15, no signal
+	const defaultReport = analyze(events)
+	assert.ok(!defaultReport.signals.some((signal) => signal.id === 'high-frequency-tool:read'))
+
+	// Custom thresholds: toolCallsInfo lowered to 5, so 10 ≥ 5 fires
+	const customReport = analyze(events, { toolCallsInfo: 5 })
+	const signal = customReport.signals.find((signal) => signal.id === 'high-frequency-tool:read')
+	assert.ok(signal !== undefined)
+	assert.equal(signal.severity, 'info')
+})
+
+test('thresholds override: custom duplicateToolCallMin changes duplicate detection', () => {
+	resetFixtures()
+	const events = [turnStart(1), stepStart(1, 1)]
+	// 2 identical calls: below default threshold of 3
+	events.push(toolCall(1, 1, 'c1', 'grep', { pattern: 'foo' }))
+	events.push(toolResult(1, 1, 'c1'))
+	events.push(toolCall(1, 1, 'c2', 'grep', { pattern: 'foo' }))
+	events.push(toolResult(1, 1, 'c2'))
+	events.push(stepEnd(1, 1), turnEnd(1))
+
+	// Default: 2 < 3, no duplicate signal
+	const defaultReport = analyze(events)
+	assert.ok(!defaultReport.signals.some((signal) => signal.id.startsWith('duplicate-tool-call:')))
+
+	// Custom: duplicateToolCallMin = 2, so 2 ≥ 2 fires
+	const customReport = analyze(events, { duplicateToolCallMin: 2 })
+	assert.ok(customReport.signals.some((signal) => signal.id.startsWith('duplicate-tool-call:')))
 })

@@ -25,12 +25,13 @@ import type { SessionAuditReport } from './audit/types.ts'
 import { formatTextReport } from './formatters/text.ts'
 import { formatMarkdownReport } from './formatters/markdown.ts'
 import { formatJsonReport } from './formatters/json.ts'
+import { DEFAULT_THRESHOLDS, type AuditThresholds } from './rules/thresholds.ts'
 
 /** Stable Cordis plugin name (must match the loader entry in cordis.patch.yml). */
 export const name = 'dsh-session-audit'
 
-/** Requires the tool registry; uses the live session registry when present. */
-export const inject = ['tools', 'sessions']
+/** Requires the tool registry; sessions service is optional (headless profiles). */
+export const inject = ['tools']
 
 /** Structural view of the services this plugin reads (no runtime imports). */
 interface SessionsService {
@@ -44,7 +45,9 @@ interface ExecLike {
 
 interface ContextLike {
 	tools: { register(definition: unknown): () => void }
-	sessions?: SessionsService
+	get(name: 'sessions'): SessionsService | undefined
+	get(name: 'commands'): { register(definition: unknown): () => void } | undefined
+	get(name: string): unknown
 	effect(cleanup: () => unknown, reason?: string): unknown
 }
 
@@ -81,6 +84,14 @@ export function apply(ctx: ContextLike): void {
 					type: 'boolean',
 					description: 'List recent durable sessions (id, cwd, created) instead of auditing one.',
 				},
+				thresholds: {
+					type: 'object',
+					description:
+						'Optional overrides for audit rule thresholds. Keys are a subset of AuditThresholds ' +
+						'(e.g. toolCallsWarning, failureRateWarning, duplicateToolCallMin). ' +
+						'Provided values are shallow-merged with the defaults.',
+					additionalProperties: true,
+				},
 			},
 		},
 		output: {
@@ -88,7 +99,10 @@ export function apply(ctx: ContextLike): void {
 			render: (_args: unknown, value: { rendered?: string }) => [{ type: 'text', text: String(value?.rendered ?? '') }],
 		},
 		isConcurrencySafe: () => true,
-		execute: async (args: { session_id?: string; format?: 'text' | 'markdown' | 'json'; list_sessions?: boolean }, exec: ExecLike): Promise<AuditToolResult> => {
+		execute: async (
+			args: { session_id?: string; format?: 'text' | 'markdown' | 'json'; list_sessions?: boolean; thresholds?: Partial<AuditThresholds> },
+			exec: ExecLike,
+		): Promise<AuditToolResult> => {
 			try {
 				if (args.list_sessions === true) {
 					return await listSessions(exec?.signal)
@@ -103,7 +117,10 @@ export function apply(ctx: ContextLike): void {
 						rendered: 'session_audit: no target session (pass session_id or list_sessions=true).',
 					}
 				}
-				return await auditSession(ctx, targetId, args.format ?? 'text', exec?.signal)
+				const mergedThresholds = args.thresholds !== undefined
+					? { ...DEFAULT_THRESHOLDS, ...args.thresholds }
+					: DEFAULT_THRESHOLDS
+				return await auditSession(ctx, targetId, args.format ?? 'text', mergedThresholds, exec?.signal)
 			} catch (error) {
 				const message = `session_audit failed: ${String((error as Error)?.message ?? error)}`
 				return { found: false, message, rendered: message }
@@ -111,6 +128,59 @@ export function apply(ctx: ContextLike): void {
 		},
 	})
 	ctx.effect(() => dispose, 'dsh-session-audit: tool registration')
+
+	// Optional slash commands: mounted only when the commands service is present
+	// (e.g. web profiles). Headless profiles load the plugin without them.
+	const commands = ctx.get('commands')
+	if (commands !== undefined) {
+		ctx.effect(() => commands.register({
+			name: 'session-audit',
+			description: 'Audit the current session (format: text, markdown, or json — empty for text)',
+			input: { hint: 'text | markdown | json — empty for text' },
+			handler: async (invocation: {
+				agent: { session: { id: string } }
+				rawInput: string
+				signal: AbortSignal
+			}): Promise<{ kind: 'success' | 'error'; text: string }> => {
+				const raw = invocation.rawInput.trim().toLowerCase()
+				const format = raw === '' || raw === 'text' ? 'text' as const
+					: raw === 'markdown' ? 'markdown' as const
+					: raw === 'json' ? 'json' as const
+					: undefined
+				if (format === undefined) {
+					return {
+						kind: 'error',
+						text: `/session-audit: unknown format "${invocation.rawInput.trim()}" (expected text, markdown, or json)`,
+					}
+				}
+				try {
+					const result = await auditSession(ctx, invocation.agent.session.id, format, DEFAULT_THRESHOLDS, invocation.signal)
+					return { kind: 'success', text: result.rendered }
+				} catch (error) {
+					return {
+						kind: 'error',
+						text: `/session-audit: ${error instanceof Error ? error.message : String(error)}`,
+					}
+				}
+			},
+		}), 'dsh-session-audit: /session-audit command')
+
+		ctx.effect(() => commands.register({
+			name: 'audit-list',
+			description: 'List recent durable DSH sessions',
+			handler: async (invocation: { signal: AbortSignal }): Promise<{ kind: 'success' | 'error'; text: string }> => {
+				try {
+					const result = await listSessions(invocation.signal)
+					return { kind: 'success', text: result.rendered }
+				} catch (error) {
+					return {
+						kind: 'error',
+						text: `/audit-list: ${error instanceof Error ? error.message : String(error)}`,
+					}
+				}
+			},
+		}), 'dsh-session-audit: /audit-list command')
+	}
 }
 
 async function listSessions(signal: AbortSignal | undefined): Promise<AuditToolResult> {
@@ -140,6 +210,7 @@ async function auditSession(
 	ctx: ContextLike,
 	sessionId: string,
 	format: 'text' | 'markdown' | 'json',
+	thresholds: AuditThresholds,
 	signal: AbortSignal | undefined,
 ): Promise<AuditToolResult> {
 	const log = await loadSessionLog(ctx, sessionId, signal)
@@ -150,7 +221,7 @@ async function auditSession(
 		return { found: false, message, rendered: `session_audit: ${message}` }
 	}
 	const adapted = adaptSession(log.raw)
-	const report = analyzeSession({ header: log.raw.header, adapted, truncatedFrames: log.raw.truncatedFrames })
+	const report = analyzeSession({ header: log.raw.header, adapted, truncatedFrames: log.raw.truncatedFrames }, thresholds)
 	const rendered =
 		format === 'json' ? formatJsonReport(report) : format === 'markdown' ? formatMarkdownReport(report) : formatTextReport(report)
 	return { found: true, report, rendered }
@@ -162,7 +233,8 @@ async function loadSessionLog(
 	sessionId: string,
 	signal: AbortSignal | undefined,
 ): Promise<{ raw: RawSessionLog; source: 'live' | 'disk' } | undefined> {
-	const live = ctx.sessions?.get(sessionId)
+	const sessions = ctx.get('sessions')
+	const live = sessions?.get(sessionId)
 	if (live !== undefined) {
 		return {
 			source: 'live',

@@ -22,7 +22,7 @@ import { type SessionHeaderLike } from './dsh/session-adapter.ts';
 import type { SessionAuditReport } from './audit/types.ts';
 /** Stable Cordis plugin name (must match the loader entry in cordis.patch.yml). */
 export declare const name = "dsh-session-audit";
-/** Requires the tool registry; uses the live session registry when present. */
+/** Requires the tool registry; sessions service is optional (headless profiles). */
 export declare const inject: string[];
 /** Structural view of the services this plugin reads (no runtime imports). */
 interface SessionsService {
@@ -36,7 +36,11 @@ interface ContextLike {
     tools: {
         register(definition: unknown): () => void;
     };
-    sessions?: SessionsService;
+    get(name: 'sessions'): SessionsService | undefined;
+    get(name: 'commands'): {
+        register(definition: unknown): () => void;
+    } | undefined;
+    get(name: string): unknown;
     effect(cleanup: () => unknown, reason?: string): unknown;
 }
 export interface AuditToolResult {

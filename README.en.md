@@ -128,12 +128,20 @@ dsh --profile web --dump-config | grep -A2 session-audit
 
 ## Usage
 
-In a session, ask the agent (it will call the tool), or call it directly:
+In a session, ask the agent (it will call the tool), or use the slash
+commands in interactive profiles:
 
 - `audit this session` — audits the current session.
 - `audit session session-abc123` — audits a stored session by id.
 - `list recent sessions` — lists durable sessions to pick from.
 - `audit this session as markdown` / `as json` — picks the format.
+
+Slash commands (available when the `commands` service is mounted, e.g. web
+profiles):
+
+- `/session-audit [text|markdown|json]` — audit the current session (empty
+  for text).
+- `/audit-list` — list recent durable sessions.
 
 Tool parameters:
 
@@ -142,6 +150,7 @@ Tool parameters:
 | `session_id` | string | target session (default: current session) |
 | `format` | `text` \| `markdown` \| `json` | report format (default `text`) |
 | `list_sessions` | boolean | list recent sessions instead of auditing |
+| `thresholds` | object | optional overrides for audit rule thresholds (shallow-merged with defaults) |
 
 The report stays local — it is returned as the tool result for you and the
 model to read; nothing is written to disk.
@@ -195,7 +204,9 @@ run through a mechanism the log cannot show.
 
 ```text
 DSH session (live registry or ~/.dsh/sessions durable log, zstd frames)
-        │  session-reader — frame split + decode + JSONL parse
+        │  session-reader — direct stat by session id (dir name IS id),
+        │                    header-frame-only decode for listing, full decode
+        │                    for audit; fallback scan when dir name ≠ header id
         ▼
 session-adapter — raw events → normalized AuditEvent vocabulary
         ▼
@@ -261,8 +272,6 @@ tests/                   node:test suites: analyzer, rules, edge cases, reader
 
 ## Limitations
 
-- v0.1 does not track file modifications (created/edited/deleted files);
-  planned for v0.2 via tool-argument analysis.
 - Verification matching is pattern-based; a verifier wrapped in an unusual
   script name is not recognized.
 - Sub-agent sessions are audited individually (by id); there is no
@@ -273,7 +282,6 @@ tests/                   node:test suites: analyzer, rules, edge cases, reader
 
 ## Roadmap
 
-- v0.2 — file modification stats
 - v0.3 — session compare
 - v0.4 — context growth analysis
 - v0.5 — HTML report
@@ -285,7 +293,7 @@ Token/cost dashboards already exist (`dsh-spend`, `dsh-balance-stats`,
 `dsh-session-cost`, `dsh-token-monitor`) and are complementary: they
 answer *how much did I spend*. This plugin answers *how did the agent
 work* — execution shape, failure locations, repetition, verification. As of
-v0.1.0 no other plugin in the `dshplugin` ecosystem covers single-session
+v0.2.0 no other plugin in the `dshplugin` ecosystem covers single-session
 execution audit.
 
 ## License

@@ -38,16 +38,17 @@ export interface AnalyzeInput {
 	truncatedFrames?: number
 }
 
-export function analyzeSession(input: AnalyzeInput, thresholds: AuditThresholds = DEFAULT_THRESHOLDS): SessionAuditReport {
-	const facts = buildFacts(input.header, input.adapted, thresholds)
-	const verification = detectVerification(facts, thresholds)
+export function analyzeSession(input: AnalyzeInput, thresholds?: AuditThresholds): SessionAuditReport {
+	const merged = thresholds !== undefined ? { ...DEFAULT_THRESHOLDS, ...thresholds } : DEFAULT_THRESHOLDS
+	const facts = buildFacts(input.header, input.adapted, merged)
+	const verification = detectVerification(facts, merged)
 	const signals: AuditSignal[] = [
-		...evaluateFailureRate(facts, thresholds),
-		...evaluateConsecutiveFailures(facts, thresholds),
-		...evaluateHighFrequencyTools(facts, thresholds),
-		...evaluateDuplicateToolCalls(facts, thresholds),
-		...evaluateRepeatedFileReads(facts, thresholds),
-		...evaluateVerification(verification, thresholds),
+		...evaluateFailureRate(facts, merged),
+		...evaluateConsecutiveFailures(facts, merged),
+		...evaluateHighFrequencyTools(facts, merged),
+		...evaluateDuplicateToolCalls(facts, merged),
+		...evaluateRepeatedFileReads(facts, merged),
+		...evaluateVerification(verification, merged),
 		...evaluateTurnEndings(facts),
 	]
 	sortSignals(signals)

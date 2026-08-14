@@ -26,7 +26,11 @@ export interface SessionLogInfo {
 }
 /** Discover every durable session log under `root`, newest mtime first. */
 export declare function listSessionLogs(root: string, signal?: AbortSignal): Promise<SessionLogInfo[]>;
-/** Read and decode one session log by id. Returns `undefined` when not found. */
+/**
+ * Read and decode one session log by id. Tries a direct stat first (the session
+ * directory name IS the session id), then falls back to a full scan of all
+ * workspace directories. Returns `undefined` when not found.
+ */
 export declare function readSessionLog(root: string, sessionId: string, signal?: AbortSignal): Promise<{
     header: SessionHeaderLike;
     events: RawSessionEvent[];

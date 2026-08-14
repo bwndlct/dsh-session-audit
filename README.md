@@ -123,12 +123,18 @@ dsh --profile web --dump-config | grep -A2 session-audit
 
 ## 使用
 
-在会话里直接让 Agent 调用（自然语言即可），或带参数调用工具：
+在会话里直接让 Agent 调用（自然语言即可），或使用斜杠命令（交互式
+profile 中可用）：
 
 - `审计当前会话` — 审计当前 session。
 - `审计 session session-abc123` — 按 id 审计某个存储的 session。
 - `列出最近的 session` — 列出可审计的持久化 session。
 - `用 markdown/json 格式审计当前会话` — 指定输出格式。
+
+斜杠命令（当 `commands` 服务挂载时可用，如 web profile）：
+
+- `/session-audit [text|markdown|json]` — 审计当前会话（空参数默认 text）
+- `/audit-list` — 列出最近的持久化会话
 
 工具参数：
 
@@ -137,6 +143,7 @@ dsh --profile web --dump-config | grep -A2 session-audit
 | `session_id` | string | 目标 session（默认当前会话） |
 | `format` | `text` \| `markdown` \| `json` | 报告格式（默认 `text`） |
 | `list_sessions` | boolean | 列出最近 session 而不是审计 |
+| `thresholds` | object | 可选的审计规则阈值覆盖（与默认值浅合并） |
 
 报告只留在本地——作为工具结果返回给你和模型阅读，不写盘。
 
@@ -184,7 +191,8 @@ dsh-tool-bash 对非零退出追加的 `[exit code: N]` 标记（文档化约定
 
 ```text
 DSH session（live 注册表 或 ~/.dsh/sessions 持久化日志，zstd 帧）
-        │  session-reader — 帧切分 + 解码 + JSONL 解析
+        │  session-reader — 按 session id 直查目录（目录名即 id），
+        │                    列出时只解码头帧，审计时完整解码；回退扫描
         ▼
 session-adapter — 原始事件 → 规范化 AuditEvent 词汇表
         ▼
@@ -247,8 +255,6 @@ tests/                   node:test 套件：analyzer、rules、边界、reader
 
 ## 限制
 
-- v0.1 不统计文件修改（创建/编辑/删除），计划 v0.2 通过工具参数分析
-  实现。
 - 验证命令识别基于模式；包在特殊脚本名里的验证器无法识别。
 - 子 Agent 的 session 需按 id 单独审计；暂无跨 session 汇总。
 - Reasoning token 在 provider 上报时展示，但部分 provider 的逐步值
@@ -257,7 +263,6 @@ tests/                   node:test 套件：analyzer、rules、边界、reader
 
 ## 路线图
 
-- v0.2 — 文件修改统计
 - v0.3 — session 对比
 - v0.4 — 上下文增长分析
 - v0.5 — HTML 报告
@@ -268,7 +273,7 @@ tests/                   node:test 套件：analyzer、rules、边界、reader
 Token/费用仪表盘已经存在（`dsh-spend`、`dsh-balance-stats`、
 `dsh-session-cost`、`dsh-token-monitor`），它们与本插件互补：回答的是
 "花了多少"。本插件回答"Agent 是怎么干活的"——执行形态、失败位置、
-重复行为、验证情况。截至 v0.1.0，`dshplugin` 生态中没有其他覆盖
+重复行为、验证情况。截至 v0.2.0，`dshplugin` 生态中没有其他覆盖
 单 session 执行审计的插件。
 
 ## 许可
